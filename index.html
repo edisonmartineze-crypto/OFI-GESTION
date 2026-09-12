@@ -529,11 +529,46 @@ textarea{min-height:88px;resize:vertical}
 
 <script>
 const STORAGE_KEY='ofi_ot_v1';
-let orders=JSON.parse(localStorage.getItem(STORAGE_KEY)||'[]');
+const API_URL='https://script.google.com/macros/s/AKfycbzTUBdjJMgA0F_txKpNR_b4__F1LT_vb9LRURLvJ_n3tTMs3AFTRllWgLky5gdbV6QV/exec';
+
+let orders=[];
+
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
 const today=()=>new Date().toISOString().slice(0,10);
-function persist(){localStorage.setItem(STORAGE_KEY,JSON.stringify(orders));renderAll();}
+
+async function apiGet(action='list'){
+  const r=await fetch(API_URL+'?action='+encodeURIComponent(action),{cache:'no-store'});
+  const j=await r.json();
+  if(!j.ok) throw new Error(j.error||'Error de API');
+  return j;
+}
+
+async function apiPost(payload){
+  const r=await fetch(API_URL,{
+    method:'POST',
+    headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body:JSON.stringify(payload)
+  });
+  const j=await r.json();
+  if(!j.ok) throw new Error(j.error||'Error de API');
+  return j;
+}
+
+async function loadOrders(){
+  try{
+    const j=await apiGet('list');
+    orders=j.data||[];
+    renderAll();
+  }catch(err){
+    console.error(err);
+    alert('No se pudo leer Google Sheets: '+err.message);
+  }
+}
+
+function persist(){
+  renderAll();
+}
 function nextNumber(){
  const year=new Date().getFullYear();
  const nums=orders.map(o=>o.otNumber).filter(x=>x&&x.startsWith('OT-'+year+'-')).map(x=>parseInt(x.split('-').pop(),10)||0);
@@ -576,12 +611,58 @@ function fillForm(o){
  $('versions').innerHTML=''; (o.versions||[]).forEach(addVersion); if(!(o.versions||[]).length)addVersion();
  showView('editor',o.otNumber);
 }
-$('otForm').addEventListener('submit',e=>{
- e.preventDefault(); const o=formData();
- if(!o.client.trim()){alert('Ingrese CLIENTE / EMPRESA.');return}
- if(!o.internalId){o.internalId=crypto.randomUUID(); o.createdAt=new Date().toISOString(); orders.push(o)}
- else {const i=orders.findIndex(x=>x.internalId===o.internalId); if(i>=0)o.createdAt=orders[i].createdAt; orders[i]=o}
- $('internalId').value=o.internalId; persist(); alert('Orden guardada.');
+$('otForm').addEventListener('submit',async e=>{
+  e.preventDefault();
+
+  const o=formData();
+
+  if(!o.client.trim()){
+    alert('Ingrese CLIENTE / EMPRESA.');
+    return;
+  }
+
+  try{
+    const i=orders.findIndex(x=>x.internalId===o.internalId);
+
+    if(i<0){
+      if(!o.internalId) o.internalId=crypto.randomUUID();
+      o.createdAt=new Date().toISOString();
+
+      const r=await apiPost({
+        action:'create',
+        data:o
+      });
+
+      const saved=r.data||o;
+      if(!saved.internalId) saved.internalId=o.internalId;
+
+      orders.push(saved);
+      $('internalId').value=saved.internalId;
+      $('otNumber').value=saved.otNumber||o.otNumber;
+
+    }else{
+      o.id=orders[i].id;
+      o.createdAt=orders[i].createdAt;
+
+      const r=await apiPost({
+        action:'update',
+        data:o
+      });
+
+      const saved=r.data||o;
+      if(!saved.internalId) saved.internalId=o.internalId;
+
+      orders[i]=saved;
+      $('internalId').value=saved.internalId;
+    }
+
+    renderAll();
+    alert('Orden guardada en Google Sheets.');
+
+  }catch(err){
+    console.error(err);
+    alert('ERROR al guardar en Google Sheets: '+err.message);
+  }
 });
 function tableHTML(list,archived=false){
  if(!list.length)return '<div class="empty">No hay órdenes para mostrar.</div>';
@@ -748,7 +829,8 @@ function buildPrint(o){
 }
 
 $('pdfBtn').onclick=()=>{const o=formData(); buildPrint(o); window.print()};
-renderAll(); if(!$('date').value)$('date').value=today();
+loadOrders();
+if(!$('date').value)$('date').value=today();
 </script>
 </body>
 </html>
