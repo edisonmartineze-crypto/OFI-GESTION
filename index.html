@@ -548,22 +548,39 @@ async function apiPost(payload){
   const form = new URLSearchParams();
   form.append('payload', JSON.stringify(payload));
 
-  const r = await fetch(API_URL,{
+  // Apps Script procesa el POST, pero su redirección puede ser bloqueada
+  // por CORS en GitHub Pages. no-cors permite enviar la operación.
+  await fetch(API_URL,{
     method:'POST',
+    mode:'no-cors',
     body:form
   });
 
-  const texto = await r.text();
+  // Esperar a que Apps Script termine de escribir en Google Sheets.
+  await new Promise(resolve=>setTimeout(resolve,1200));
 
-  let j;
-  try{
-    j=JSON.parse(texto);
-  }catch(e){
-    throw new Error('Respuesta inválida del servidor: '+texto);
+  // Verificar mediante GET (que sí funciona desde GitHub Pages).
+  const check=await apiGet('list');
+  const list=check.data||[];
+
+  if(payload.action==='create' || payload.action==='update'){
+    const data=payload.data||{};
+    const saved=list.find(o=>
+      (data.internalId && o.internalId===data.internalId) ||
+      (data.id!=null && String(o.id)===String(data.id))
+    );
+
+    if(!saved){
+      throw new Error('La OT no apareció en Google Sheets después de guardar.');
+    }
+    return {ok:true,data:saved};
   }
 
-  if(!j.ok) throw new Error(j.error||'Error de API');
-  return j;
+  if(payload.action==='archive' || payload.action==='reopen'){
+    return {ok:true};
+  }
+
+  return {ok:true};
 }
 async function loadOrders(){
   try{
